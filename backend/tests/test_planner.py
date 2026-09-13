@@ -96,8 +96,9 @@ class PlannerTests(unittest.TestCase):
     def test_model_router_marks_semantic_capabilities_unavailable(self):
         plan = build_query_plan("What is visible in this satellite image?")
         route = route_plan(plan)
-        self.assertEqual(route["requested_capability"], "RS/VLM capability")
-        self.assertFalse(route["available"])
+        # VQA now routes to BLIP (available on CPU).
+        self.assertEqual(route["requested_capability"], "BLIP")
+        self.assertTrue(route["available"])
         self.assertEqual(route["execution"], "not_executed")
 
     def test_png_metadata_is_real_and_nonsemantic(self):

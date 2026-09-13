@@ -40,7 +40,11 @@ def build_query_plan(
     inferred_count = _infer_image_count(normalized, image_count)
     objects = _extract_objects(normalized)
 
-    if "optical" in effective_modalities and "sar" in effective_modalities:
+    if ("optical" in stated_modalities and "sar" in stated_modalities) or (
+        "optical" in effective_modalities
+        and "sar" in effective_modalities
+        and re.search(r"\b(together|both|cross|fuse|fusion|joint|optical\s+and\s+sar)\b", normalized)
+    ):
         return QueryPlan(
             task="optical_sar_analysis",
             objects=objects,
@@ -69,6 +73,21 @@ def build_query_plan(
             modalities=effective_modalities,
             required_evidence=["image content"],
             output_types=["caption"],
+        )
+
+    # Object detection: explicit detect/find all, bounding box, create box, draw box, locate
+    if re.search(
+        r"\b(detect\s+(all\s+)?objects|find\s+all\s+objects|object\s+detection|detect\s+everything|"
+        r"create\s+box|draw\s+box|bounding\s*box|box\s+on|locate\s+all|localize)\b",
+        normalized,
+    ):
+        return QueryPlan(
+            task="object_detection",
+            objects=objects,
+            image_count=inferred_count,
+            modalities=effective_modalities,
+            required_evidence=["image content"],
+            output_types=["detection_list", "evidence"],
         )
 
     if re.search(r"\b(what|which|where|is there|identify|visible|detect|show|find|list)\b", normalized):
@@ -168,6 +187,12 @@ def _apply_task_metadata(plan: QueryPlan, task: str, query: str) -> QueryPlan:
         updates.update(
             required_evidence=_evidence_for(plan.objects, "optical imagery", "SAR imagery"),
             output_types=["analysis", "evidence"],
+            temporal=False,
+        )
+    elif task == "object_detection":
+        updates.update(
+            required_evidence=["image content"],
+            output_types=["detection_list", "evidence"],
             temporal=False,
         )
     else:

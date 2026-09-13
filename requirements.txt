@@ -1,2 +1,7 @@
 fastapi>=0.115
 uvicorn>=0.30
+torch>=2.0
+torchvision>=0.15
+transformers>=4.30
+Pillow>=10.0
+ultralytics>=8.0

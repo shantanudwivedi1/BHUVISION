@@ -8,7 +8,9 @@ const MODALITIES = [
 ]
 
 const EXAMPLES = [
+  'Detect all objects in this image.',
   'What is visible in this satellite image?',
+  'Describe this image.',
   'What new buildings appeared between these two images?',
   'Use optical and SAR images together to identify water-covered regions.',
 ]
@@ -138,13 +140,16 @@ function Result({ response, previews }) {
   const audit = response.audit_trace || {}
   const confidence = response.confidence_report || { signals: [], aggregate_value: null, notes: [] }
   const unavailable = routing.requested_capability && !routing.available
-  const semanticAnswer = false
+  // Derive from actual evidence — true when any model_finding exists.
+  const semanticAnswer = (response.evidence || []).some((e) => e.evidence_type === 'model_finding')
   const images = result.image_analysis || []
+  const warnings = response.warnings || []
   return <div className="result-stack">
     <section className="answer-card surface">
-      <div className="answer-top"><p className="label">Final answer</p><span className={`outcome-badge ${unavailable ? 'unavailable' : 'observed'}`}><i />{unavailable ? 'CAPABILITY UNAVAILABLE' : 'NO SEMANTIC ANSWER'}</span></div>
-      <h2>{semanticAnswer ? 'Semantic finding available.' : 'No semantic finding was produced.'}</h2>
-      <p className="answer-explanation">{unavailable ? routing.reason : result.summary || 'The current pipeline returned no semantic interpretation.'}</p>
+      <div className="answer-top"><p className="label">Final answer</p><span className={`outcome-badge ${unavailable ? 'unavailable' : semanticAnswer ? 'observed' : 'observed'}`}><i />{unavailable ? 'CAPABILITY UNAVAILABLE' : semanticAnswer ? 'MODEL RESULT' : 'NO SEMANTIC ANSWER'}</span></div>
+      <h2>{semanticAnswer ? (result.summary || 'Semantic finding available.') : 'No semantic finding was produced.'}</h2>
+      <p className="answer-explanation">{unavailable ? routing.reason : (result.summary && semanticAnswer ? `Model inference completed: ${result.summary}` : result.summary || 'The current pipeline returned no semantic interpretation.')}</p>
+      {warnings.length > 0 && <div className="alert error-alert" style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>{warnings.map((w, idx) => <p key={idx}>⚠️ {w}</p>)}</div>}
       <div className="answer-foot"><span>Honest output boundary</span><strong>{semanticAnswer ? 'Model-backed result' : 'Metadata and trace only'}</strong></div>
     </section>
 
@@ -169,7 +174,8 @@ function ConfidenceCard({ report }) {
 
 function EvidenceCard({ response, images, previews }) {
   const evidence = response.evidence || []
-  return <section className="evidence-card surface"><div className="card-title-row"><div><p className="label">Visual evidence</p><h3>What the system actually observed</h3></div><span className="evidence-count">{evidence.length} item{evidence.length === 1 ? '' : 's'}</span></div><div className="evidence-layout"><div className="evidence-preview-strip">{previews.length ? previews.map(({ file, url }) => <img key={`${file.name}-${file.size}`} src={url} alt={file.name} />) : <div className="no-preview">No image preview</div>}</div><div className="evidence-details">{images.length ? images.map((image) => <div className="evidence-item" key={image.filename}><span className="evidence-icon">▧</span><div><strong>{image.filename}</strong><small>{image.format} · {image.width} × {image.height} · {image.channels} channel{image.channels === 1 ? '' : 's'}</small></div><em>{image.quality?.warnings?.length ? image.quality.warnings.join(', ') : 'quality checks passed'}</em></div>) : <p className="empty-copy">No supported image metadata was returned.</p>}</div></div><p className="evidence-disclaimer">Visual evidence is limited to uploaded-image metadata in this prototype. No semantic overlay or object label is being claimed.</p></section>
+  const modelFindings = evidence.filter((e) => e.evidence_type === 'model_finding')
+  return <section className="evidence-card surface"><div className="card-title-row"><div><p className="label">Visual evidence</p><h3>What the system actually observed</h3></div><span className="evidence-count">{evidence.length} item{evidence.length === 1 ? '' : 's'}</span></div><div className="evidence-layout"><div className="evidence-preview-strip">{previews.length ? previews.map(({ file, url }) => <img key={`${file.name}-${file.size}`} src={url} alt={file.name} />) : <div className="no-preview">No image preview</div>}</div><div className="evidence-details">{modelFindings.map((finding, idx) => <div className="evidence-item" key={`model-${idx}`}><span className="evidence-icon">✦</span><div><strong>{finding.finding}</strong><small>{finding.model || 'Specialist model'}{finding.confidence ? ` · confidence: ${Math.round(finding.confidence * 100)}%` : ''}{finding.spatial?.bbox ? ` · bbox: [${finding.spatial.bbox.join(', ')}]` : ''}</small></div><em>{finding.source || 'analyzed image'}</em></div>)}{images.length ? images.map((image) => <div className="evidence-item" key={image.filename}><span className="evidence-icon">▧</span><div><strong>{image.filename}</strong><small>{image.format} · {image.width} × {image.height} · {image.channels} channel{image.channels === 1 ? '' : 's'}</small></div><em>{image.quality?.warnings?.length ? image.quality.warnings.join(', ') : 'quality checks passed'}</em></div>) : null}{!evidence.length && <p className="empty-copy">No supported image metadata was returned.</p>}</div></div><p className="evidence-disclaimer">{modelFindings.length > 0 ? `Visual evidence includes automated specialist model inference (${modelFindings.length} model finding${modelFindings.length === 1 ? '' : 's'}). Model findings are empirical observations, not guaranteed ground truth.` : 'Visual evidence is limited to uploaded-image metadata in this prototype. No semantic overlay or object label is being claimed.'}</p></section>
 }
 
 function TraceRow({ label, value }) { return <div className="trace-row"><span>{label}</span><strong>{value}</strong></div> }

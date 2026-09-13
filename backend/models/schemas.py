@@ -5,9 +5,9 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-TaskName = Literal["vqa", "captioning", "change_detection", "optical_sar_analysis", "unsupported"]
+TaskName = Literal["vqa", "captioning", "change_detection", "optical_sar_analysis", "object_detection", "unsupported"]
 ModalityName = Literal["optical", "sar", "multispectral", "hyperspectral", "thermal", "radar"]
-OutputType = Literal["answer", "caption", "object_list", "change_map", "analysis", "evidence"]
+OutputType = Literal["answer", "caption", "object_list", "change_map", "analysis", "evidence", "detection_list"]
 ConfidenceSignalStatus = Literal["available", "unavailable"]
 
 

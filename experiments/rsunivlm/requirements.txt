@@ -1,0 +1,4 @@
+# Install the official RSUniVLM repository first; its CUDA/PyTorch stack is
+# intentionally not duplicated here. This file contains only the experiment's
+# direct image dependency.
+Pillow>=10.0

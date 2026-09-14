@@ -1,45 +1,24 @@
 """Route a QueryPlan to the right specialist model and execute it.
 
+Only two specialists: BLIP (VQA + Captioning) and YOLOv8 (Object Detection).
 Adapters are instantiated once at module level (cheap — no model weights
-are loaded until actual inference).  The execute_plan() function is the
-new entry point called by the /analyze endpoint.
+are loaded until actual inference).
 """
 
 from typing import Any
 
 from backend.models.schemas import Evidence, QueryPlan
 from backend.router.blip import BLIPAdapter
-from backend.router.croma import CROMAAdapter
 from backend.router.yolo import YOLOAdapter
 
 
 # Singleton adapters — lightweight until first inference call.
 _blip = BLIPAdapter()
 _yolo = YOLOAdapter()
-_croma = CROMAAdapter()
 
 
 def route_plan(plan: QueryPlan) -> dict:
     """Describe which capability the plan needs and whether it's available."""
-
-    if plan.task == "optical_sar_analysis":
-        descriptor = _croma.describe().as_dict()
-        return {
-            "requested_capability": "CROMA",
-            "model_name": descriptor["model_name"],
-            "capabilities": descriptor["capabilities"],
-            "required_modalities": descriptor["required_modalities"],
-            "available": descriptor["available"],
-            "execution": "not_executed",
-            "output_type": "learned_representation/features",
-            "reason": (
-                descriptor["reason"]
-                if not descriptor["available"]
-                else "CROMA is available for feature extraction; modality-labeled Sentinel-1/2 tensors are required for execution."
-            ),
-            "lightweight_capability": "image_metadata_analyzer",
-            "lightweight_available": True,
-        }
 
     # VQA / Captioning → BLIP
     if plan.task in {"vqa", "captioning"}:
@@ -100,18 +79,19 @@ def execute_plan(
     routing: dict,
     uploads: list[tuple[str, str, bytes]],
     query: str,
-) -> tuple[list[Evidence], list[str]]:
-    """Run the routed model on uploaded images, returning evidence and warnings.
+) -> tuple[list[Evidence], list[str], list[dict[str, Any]]]:
+    """Run the routed model on uploaded images.
 
-    Returns a (evidence_list, warnings_list) tuple.  If the model is
-    unavailable or no images were uploaded, returns empty evidence with
-    an appropriate warning.
+    Returns (evidence_list, warnings_list, annotated_images).
+    annotated_images is a list of {"filename": str, "data_url": str} dicts
+    containing base64-encoded PNGs with bounding boxes drawn on them.
     """
     evidence: list[Evidence] = []
     warnings: list[str] = []
+    annotated_images: list[dict[str, Any]] = []
 
     if not routing.get("available") or not uploads:
-        return evidence, warnings
+        return evidence, warnings, annotated_images
 
     # -- BLIP VQA ----------------------------------------------------------
     if plan.task == "vqa":
@@ -158,6 +138,12 @@ def execute_plan(
                         spatial={"bbox": det["bbox"]},
                         provenance={"method": "yolov8_detection"},
                     ))
+                # Attach the annotated image with bounding boxes drawn
+                if result.get("annotated_image"):
+                    annotated_images.append({
+                        "filename": filename,
+                        "data_url": result["annotated_image"],
+                    })
                 if not result["detections"]:
                     warnings.append(f"No objects detected in {filename} above the confidence threshold.")
             except Exception as exc:
@@ -167,4 +153,4 @@ def execute_plan(
     if evidence:
         routing["execution"] = "executed"
 
-    return evidence, warnings
+    return evidence, warnings, annotated_images

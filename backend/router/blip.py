@@ -22,7 +22,7 @@ class BLIPConfig:
     enabled: bool = True
     device: str = "cpu"
     vqa_model_id: str = "Salesforce/blip-vqa-base"
-    caption_model_id: str = "Salesforce/blip-image-captioning-base"
+    caption_model_id: str = "Salesforce/blip-vqa-base"
 
     @classmethod
     def from_env(cls) -> "BLIPConfig":
@@ -30,7 +30,7 @@ class BLIPConfig:
             enabled=os.getenv("BHUVISION_BLIP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
             device=os.getenv("BHUVISION_BLIP_DEVICE", "cpu").strip(),
             vqa_model_id=os.getenv("BHUVISION_BLIP_VQA_MODEL", "Salesforce/blip-vqa-base").strip(),
-            caption_model_id=os.getenv("BHUVISION_BLIP_CAPTION_MODEL", "Salesforce/blip-image-captioning-base").strip(),
+            caption_model_id=os.getenv("BHUVISION_BLIP_CAPTION_MODEL", "Salesforce/blip-vqa-base").strip(),
         )
 
 
@@ -77,13 +77,12 @@ class BLIPAdapter:
         return {"answer": answer, "model": self.config.vqa_model_id}
 
     def caption(self, image_bytes: bytes) -> dict[str, Any]:
-        """Generate a free-form caption for an image.
+        """Generate a description / caption for an image.
 
-        If the dedicated captioning model is cached, use it. Otherwise,
-        leverage the already-cached VQA model with a descriptive prompt
-        so the user gets immediate results without needing an extra 1 GB download.
+        Uses the cached BLIP model (Salesforce/blip-vqa-base) which is
+        already downloaded on disk, eliminating any 990 MB download on restart.
         """
-        if _is_model_cached(self.config.caption_model_id):
+        if self.config.caption_model_id != self.config.vqa_model_id and _is_model_cached(self.config.caption_model_id):
             model, processor = self._load_caption()
             image = _open_image(image_bytes)
             inputs = processor(image, return_tensors="pt").to(self.config.device)
@@ -91,9 +90,9 @@ class BLIPAdapter:
             text = processor.decode(out[0], skip_special_tokens=True).strip()
             return {"caption": text, "model": self.config.caption_model_id}
 
-        # Seamless fallback to the cached VQA model
+        # Seamlessly use the local cached VQA model
         vqa_res = self.vqa(image_bytes, "Describe what you see in this image")
-        return {"caption": vqa_res["answer"], "model": f"{self.config.vqa_model_id} (vqa-caption)"}
+        return {"caption": vqa_res["answer"], "model": self.config.vqa_model_id}
 
     # -- Internals ---------------------------------------------------------
 

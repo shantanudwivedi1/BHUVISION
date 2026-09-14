@@ -55,8 +55,8 @@ async def analyze(request: Request) -> AnalysisResponse:
         except UnsupportedImageError as exc:
             errors.append(str(exc))
 
-    # -- Model execution (BLIP / YOLO / CROMA) ----------------------------
-    model_evidence, model_warnings = execute_plan(plan, routing, uploads, request_model.query)
+    # -- Model execution (BLIP / YOLO) ------------------------------------
+    model_evidence, model_warnings, annotated_images = execute_plan(plan, routing, uploads, request_model.query)
     evidence.extend(model_evidence)
     warnings.extend(model_warnings)
 
@@ -100,6 +100,7 @@ async def analyze(request: Request) -> AnalysisResponse:
         result={
             "summary": summary,
             "image_analysis": image_analysis,
+            "annotated_images": annotated_images,
             "evidence_summary": {
                 "findings": aggregation.findings,
                 "sources": aggregation.sources,

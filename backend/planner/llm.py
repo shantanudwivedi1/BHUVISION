@@ -50,7 +50,7 @@ class LLMPlannerConfig:
 class LLMQueryPlanner:
     """Small provider adapter for an OpenAI-compatible chat-completions API."""
 
-    _TASKS = ["vqa", "captioning", "change_detection", "optical_sar_analysis", "object_detection", "unsupported"]
+    _TASKS = ["vqa", "captioning", "change_detection", "object_detection", "unsupported"]
 
     def __init__(self, config: LLMPlannerConfig | None = None):
         self.config = config or LLMPlannerConfig.from_env()

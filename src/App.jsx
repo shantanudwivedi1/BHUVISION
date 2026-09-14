@@ -3,16 +3,16 @@ import { useEffect, useMemo, useState } from 'react'
 const API_URL = import.meta.env.VITE_API_URL || ''
 
 const MODALITIES = [
-  { id: 'optical', label: 'Optical', detail: 'Sentinel-2 / RGB' },
+  { id: 'optical', label: 'Optical', detail: 'RGB / Satellite' },
   { id: 'sar', label: 'SAR', detail: 'Radar backscatter' },
 ]
 
 const EXAMPLES = [
   'Detect all objects in this image.',
+  'Highlight the buildings in this image.',
   'What is visible in this satellite image?',
   'Describe this image.',
-  'What new buildings appeared between these two images?',
-  'Use optical and SAR images together to identify water-covered regions.',
+  'Find vehicles in this scene.',
 ]
 
 function App() {
@@ -97,7 +97,7 @@ function App() {
             <button className="analyze-button" onClick={analyze} disabled={loading}><span className={loading ? 'button-spinner' : 'button-mark'}>{loading ? '' : '↗'}</span>{loading ? 'Building trace…' : 'Analyze scene'}<span className="button-arrow">→</span></button>
             {error && <div className="alert error-alert"><span>!</span>{error}</div>}
           </section>
-          <p className="privacy-note"><span>⌁</span> Local prototype · No model outputs are invented when a capability is unavailable.</p>
+          <p className="privacy-note"><span>⌁</span> Local prototype · BLIP (VQA & Captioning) + YOLOv8 (Object Detection).</p>
         </section>
 
         <section className="right-column">
@@ -144,6 +144,9 @@ function Result({ response, previews }) {
   const semanticAnswer = (response.evidence || []).some((e) => e.evidence_type === 'model_finding')
   const images = result.image_analysis || []
   const warnings = response.warnings || []
+  const annotatedImages = result.annotated_images || []
+  const hasDetections = (response.evidence || []).some((e) => e.evidence_type === 'model_finding' && e.spatial?.bbox)
+
   return <div className="result-stack">
     <section className="answer-card surface">
       <div className="answer-top"><p className="label">Final answer</p><span className={`outcome-badge ${unavailable ? 'unavailable' : semanticAnswer ? 'observed' : 'observed'}`}><i />{unavailable ? 'CAPABILITY UNAVAILABLE' : semanticAnswer ? 'MODEL RESULT' : 'NO SEMANTIC ANSWER'}</span></div>
@@ -158,11 +161,37 @@ function Result({ response, previews }) {
       <InfoCard label="Selected capability" value={routing.requested_capability || 'Deterministic only'} sub={routing.available ? 'available' : 'unavailable'} icon="⌁" tone={unavailable ? 'amber' : 'green'} />
     </div>
 
+    {/* Show annotated overlay only when YOLO actually found objects */}
+    {annotatedImages.length > 0 && hasDetections && <AnnotatedImagesCard images={annotatedImages} />}
+
     <ConfidenceCard report={confidence} />
     <EvidenceCard response={response} images={images} previews={previews} />
 
     <details className="trace-card surface"><summary><span><b>04</b><strong>Analysis trace</strong></span><em>Expand record <i>⌄</i></em></summary><div className="trace-content"><TraceRow label="Execution" value={formatLabel(audit.execution_status || routing.execution || 'not recorded')} /><TraceRow label="Plan" value={`${formatLabel(plan.task || 'unknown')} · ${plan.modalities?.join(' + ') || 'modalities not declared'}`} /><TraceRow label="Requested capability" value={routing.requested_capability || 'none'} /><TraceRow label="Analysis ID" value={audit.analysis_id || 'not recorded'} /><details className="json-trace"><summary>View serialized trace</summary><pre>{JSON.stringify({ plan, routing, audit, confidence }, null, 2)}</pre></details></div></details>
   </div>
+}
+
+function AnnotatedImagesCard({ images }) {
+  return (
+    <section className="annotated-card surface">
+      <div className="card-title-row">
+        <div>
+          <p className="label">Detection overlay</p>
+          <h3>Objects detected with bounding boxes</h3>
+        </div>
+        <span className="evidence-count">{images.length} image{images.length === 1 ? '' : 's'}</span>
+      </div>
+      <div className="annotated-gallery">
+        {images.map((img, idx) => (
+          <div className="annotated-item" key={idx}>
+            <img src={img.data_url} alt={`Detection result for ${img.filename}`} />
+            <span className="annotated-label">{img.filename}</span>
+          </div>
+        ))}
+      </div>
+      <p className="evidence-disclaimer">Bounding boxes are drawn by YOLOv8. Labels and confidence scores are overlaid on the original image.</p>
+    </section>
+  )
 }
 
 function InfoCard({ label, value, sub, icon, tone = 'green' }) { return <section className="info-card surface"><div className={`info-icon ${tone}`}>{icon}</div><div><p className="label">{label}</p><strong>{value}</strong><small className={tone === 'amber' ? 'amber-text' : ''}>{sub}</small></div></section> }

@@ -26,6 +26,23 @@ _OBJECT_PATTERNS = (
 
 _CHANGE_PATTERN = r"\b(change|changed|changes|compare|compared|between|appeared|disappeared)\b"
 
+# Patterns that clearly indicate the user wants visual object detection (boxes on image)
+_DETECTION_PATTERN = (
+    r"\b(detect\s+(all\s+)?objects|find\s+all\s+objects|object\s+detection|detect\s+everything|"
+    r"create\s+box|draw\s+box|bounding\s*box|box\s+on|locate\s+all|localize|"
+    r"highlight|mark\s+(all|the|every)|spot\s+(all|the|every)|outline|"
+    r"detect\s+and\s+(show|mark|highlight)|show\s+detection)"
+    r"\b"
+)
+
+# When detect/highlight/find + a known object → treat as detection task
+_ACTION_OBJECT_PATTERN = (
+    r"\b(detect|highlight|mark|spot|outline|locate|find)\b"
+    r".*"
+    r"\b(buildings?|water|rivers?|lakes?|roads?|highways?|streets?|ships?|vessels?|"
+    r"vegetation|trees?|forests?|crops?|plants?|vehicles?|cars?|trucks?|clouds?|objects?)\b"
+)
+
 
 def build_query_plan(
     query: str,
@@ -40,20 +57,7 @@ def build_query_plan(
     inferred_count = _infer_image_count(normalized, image_count)
     objects = _extract_objects(normalized)
 
-    if ("optical" in stated_modalities and "sar" in stated_modalities) or (
-        "optical" in effective_modalities
-        and "sar" in effective_modalities
-        and re.search(r"\b(together|both|cross|fuse|fusion|joint|optical\s+and\s+sar)\b", normalized)
-    ):
-        return QueryPlan(
-            task="optical_sar_analysis",
-            objects=objects,
-            image_count=max(inferred_count, 2),
-            modalities=effective_modalities,
-            required_evidence=_evidence_for(objects, "optical imagery", "SAR imagery"),
-            output_types=["analysis", "evidence"],
-        )
-
+    # Temporal change detection (needs ≥2 images)
     if re.search(_CHANGE_PATTERN, normalized) and inferred_count >= 2:
         return QueryPlan(
             task="change_detection",
@@ -65,6 +69,7 @@ def build_query_plan(
             output_types=["change_map", "evidence"],
         )
 
+    # Captioning — "describe", "caption", "summarize"
     if re.search(r"\b(describe|caption|summari[sz]e)\b", normalized):
         return QueryPlan(
             task="captioning",
@@ -75,12 +80,8 @@ def build_query_plan(
             output_types=["caption"],
         )
 
-    # Object detection: explicit detect/find all, bounding box, create box, draw box, locate
-    if re.search(
-        r"\b(detect\s+(all\s+)?objects|find\s+all\s+objects|object\s+detection|detect\s+everything|"
-        r"create\s+box|draw\s+box|bounding\s*box|box\s+on|locate\s+all|localize)\b",
-        normalized,
-    ):
+    # Object detection — explicit patterns like "detect objects", "highlight", "draw box"
+    if re.search(_DETECTION_PATTERN, normalized):
         return QueryPlan(
             task="object_detection",
             objects=objects,
@@ -90,6 +91,18 @@ def build_query_plan(
             output_types=["detection_list", "evidence"],
         )
 
+    # Object detection — action verb + known object, e.g. "detect buildings", "highlight cars"
+    if re.search(_ACTION_OBJECT_PATTERN, normalized):
+        return QueryPlan(
+            task="object_detection",
+            objects=objects,
+            image_count=inferred_count,
+            modalities=effective_modalities,
+            required_evidence=["image content"],
+            output_types=["detection_list", "evidence"],
+        )
+
+    # VQA — natural language questions ("what", "where", "is there", etc.)
     if re.search(r"\b(what|which|where|is there|identify|visible|detect|show|find|list)\b", normalized):
         output_types = ["object_list", "evidence"] if objects and re.search(r"\b(show|find|list)\b", normalized) else ["answer", "evidence"]
         return QueryPlan(
@@ -129,8 +142,6 @@ def build_query_plan_with_optional_llm(
     except LLMPlannerError:
         return deterministic_plan
 
-    if task == "optical_sar_analysis" and not {"optical", "sar"}.issubset(deterministic_plan.modalities):
-        return deterministic_plan
     if task == "change_detection" and deterministic_plan.image_count < 2:
         return deterministic_plan
     return _apply_task_metadata(deterministic_plan, task, query)
@@ -182,12 +193,6 @@ def _apply_task_metadata(plan: QueryPlan, task: str, query: str) -> QueryPlan:
             required_evidence=_evidence_for(plan.objects, "image pair", "temporal difference"),
             output_types=["change_map", "evidence"],
             temporal=True,
-        )
-    elif task == "optical_sar_analysis":
-        updates.update(
-            required_evidence=_evidence_for(plan.objects, "optical imagery", "SAR imagery"),
-            output_types=["analysis", "evidence"],
-            temporal=False,
         )
     elif task == "object_detection":
         updates.update(

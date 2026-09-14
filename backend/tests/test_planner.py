@@ -15,7 +15,9 @@ class PlannerTests(unittest.TestCase):
             "Describe this image.": "captioning",
             "What new buildings appeared between these two images?": "change_detection",
             "Compare these two images and show what changed.": "change_detection",
-            "Use optical and SAR images together to identify water-covered regions.": "optical_sar_analysis",
+            "Detect all objects in this image.": "object_detection",
+            "Highlight the buildings in this scene.": "object_detection",
+            "Find vehicles in this image.": "object_detection",
             "Show the ships in this image.": "vqa",
             "Hello, how are you?": "unsupported",
         }
@@ -36,14 +38,23 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(change.temporal)
         self.assertEqual(change.modalities, [])
 
-        multimodal = build_query_plan("Use optical and SAR images together to identify water-covered regions.")
-        self.assertEqual(multimodal.objects, ["water"])
-        self.assertEqual(multimodal.modalities, ["optical", "sar"])
-        self.assertEqual(multimodal.image_count, 2)
-
         ships = build_query_plan("Show the ships in this image.")
         self.assertEqual(ships.objects, ["ships"])
         self.assertEqual(ships.output_types, ["object_list", "evidence"])
+
+    def test_highlight_and_detect_trigger_object_detection(self):
+        """Queries with highlight/detect/mark + objects should route to YOLO."""
+        cases = {
+            "Highlight buildings in this image.": "object_detection",
+            "Detect cars in this scene.": "object_detection",
+            "Mark all the vehicles.": "object_detection",
+            "Spot the ships in this image.": "object_detection",
+            "Outline the roads.": "object_detection",
+            "Locate the buildings.": "object_detection",
+        }
+        for query, task in cases.items():
+            with self.subTest(query=query):
+                self.assertEqual(build_query_plan(query).task, task)
 
     def test_query_plan_validation_controls_values(self):
         with self.assertRaises(ValidationError):
@@ -58,7 +69,7 @@ class PlannerTests(unittest.TestCase):
             "Describe this image.": "captioning",
             "What new buildings appeared between these two images?": "change_detection",
             "Compare these two images and show what changed.": "change_detection",
-            "Use optical and SAR images together to identify water-covered regions.": "optical_sar_analysis",
+            "Detect all objects in this image.": "object_detection",
             "Show the ships in this image.": "vqa",
             "Hello, how are you?": "unsupported",
         }
@@ -96,10 +107,16 @@ class PlannerTests(unittest.TestCase):
     def test_model_router_marks_semantic_capabilities_unavailable(self):
         plan = build_query_plan("What is visible in this satellite image?")
         route = route_plan(plan)
-        # VQA now routes to BLIP (available on CPU).
+        # VQA routes to BLIP (available on CPU).
         self.assertEqual(route["requested_capability"], "BLIP")
         self.assertTrue(route["available"])
         self.assertEqual(route["execution"], "not_executed")
+
+    def test_object_detection_routes_to_yolo(self):
+        plan = build_query_plan("Detect all objects in this image.")
+        route = route_plan(plan)
+        self.assertEqual(route["requested_capability"], "YOLOv8")
+        self.assertTrue(route["available"])
 
     def test_png_metadata_is_real_and_nonsemantic(self):
         png_header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + (640).to_bytes(4, "big") + (480).to_bytes(4, "big") + b"\x08\x02"

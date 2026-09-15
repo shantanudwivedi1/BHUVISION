@@ -112,10 +112,10 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(route["available"])
         self.assertEqual(route["execution"], "not_executed")
 
-    def test_object_detection_routes_to_yolo(self):
+    def test_object_detection_routes_to_grounding_dino(self):
         plan = build_query_plan("Detect all objects in this image.")
         route = route_plan(plan)
-        self.assertIn("YOLO11", route["requested_capability"])
+        self.assertIn("Grounding DINO", route["requested_capability"])
         self.assertTrue(route["available"])
 
     def test_png_metadata_is_real_and_nonsemantic(self):

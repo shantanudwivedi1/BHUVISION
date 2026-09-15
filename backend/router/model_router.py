@@ -9,11 +9,11 @@ from typing import Any
 
 from backend.models.schemas import Evidence, QueryPlan
 from backend.router.geochat import GeoChatAdapter
-from backend.router.yolo import YOLOAdapter
+from backend.router.grounding_dino import GroundingDINOAdapter
 
 # Singleton adapters — lightweight until first inference call.
 _geochat = GeoChatAdapter()
-_yolo = YOLOAdapter()
+_grounding_dino = GroundingDINOAdapter()
 
 
 def route_plan(plan: QueryPlan) -> dict:
@@ -34,22 +34,22 @@ def route_plan(plan: QueryPlan) -> dict:
             "lightweight_available": True,
         }
 
-    # Object detection → GeoChat-7B grounding + YOLO11 bounding boxes
+    # Object detection → GeoChat-7B grounding + Grounding DINO open-vocabulary bounding boxes
     if plan.task == "object_detection":
         model_names = []
         if geochat_desc["available"]:
             model_names.append("GeoChat-7B")
-        yolo_desc = _yolo.describe().as_dict()
-        if yolo_desc["available"]:
-            model_names.append("YOLO11")
+        dino_desc = _grounding_dino.describe().as_dict()
+        if dino_desc["available"]:
+            model_names.append("Grounding DINO")
 
         return {
-            "requested_capability": "GeoChat-7B + YOLO11",
-            "model_name": " + ".join(model_names) or "YOLO11",
-            "capabilities": ["object_detection", "grounding", "bounding_boxes"],
+            "requested_capability": "GeoChat-7B + Grounding DINO",
+            "model_name": " + ".join(model_names) or "Grounding DINO",
+            "capabilities": ["object_detection", "grounding", "open_vocabulary", "bounding_boxes"],
             "available": bool(model_names),
             "execution": "not_executed",
-            "reason": "Grounded object detection with GeoChat-7B and real-time bounding boxes via YOLO11.",
+            "reason": "Grounded object detection with GeoChat-7B and open-vocabulary bounding boxes via Grounding DINO.",
             "lightweight_capability": "image_metadata_analyzer",
             "lightweight_available": True,
         }
@@ -191,29 +191,29 @@ def execute_plan(
                 except Exception as exc:
                     warnings.append(f"GeoChat detection grounding failed on {filename}: {exc}")
 
-            # 2. Run YOLO Object Detection (real-time bounding boxes)
+            # 2. Run Grounding DINO Object Detection (open-vocabulary bounding boxes)
             try:
-                yolo_result = _yolo.detect(data)
-                for det in yolo_result["detections"]:
+                dino_result = _grounding_dino.detect(data, query=query)
+                for det in dino_result["detections"]:
                     evidence.append(Evidence(
                         evidence_type="model_finding",
                         source=filename,
-                        model=yolo_result["model"],
+                        model=dino_result["model"],
                         finding=f"Detected {det['class']}",
                         confidence=det["confidence"],
                         spatial={"bbox": det["bbox"]},
-                        provenance={"method": "yolo11_detection"},
+                        provenance={"method": "grounding_dino_detection", "prompt": dino_result.get("text_prompt")},
                     ))
-                if yolo_result.get("annotated_image"):
+                if dino_result.get("annotated_image"):
                     annotated_images.append({
-                        "filename": f"yolo_{filename}",
-                        "data_url": yolo_result["annotated_image"],
-                        "source_model": "YOLO11",
+                        "filename": f"grounding_dino_{filename}",
+                        "data_url": dino_result["annotated_image"],
+                        "source_model": "Grounding DINO",
                     })
-                if not yolo_result["detections"] and not annotated_images:
-                    warnings.append(f"No objects detected in {filename} above the confidence threshold.")
+                if not dino_result["detections"] and not annotated_images:
+                    warnings.append(f"No objects detected in {filename} matching query '{query}' above confidence threshold.")
             except Exception as exc:
-                warnings.append(f"YOLO detection failed on {filename}: {exc}")
+                warnings.append(f"Grounding DINO detection failed on {filename}: {exc}")
 
     # Mark that the model was executed in the routing dict.
     if evidence:

@@ -79,7 +79,7 @@ class GeoChatTests(unittest.TestCase):
         plan_det = QueryPlan(task="object_detection", intent="Detect storage tanks.", modality_requirements=["optical"])
         route_det = route_plan(plan_det)
         self.assertIn("GeoChat-7B", route_det["requested_capability"])
-        self.assertIn("YOLO11", route_det["requested_capability"])
+        self.assertIn("Grounding DINO", route_det["requested_capability"])
 
 
 if __name__ == "__main__":

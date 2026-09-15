@@ -1,7 +1,7 @@
-"""YOLOv8 adapter for real-time object detection.
+"""YOLO11 adapter for real-time object detection.
 
-Uses the ultralytics YOLOv8-nano model which is lightweight (~6 MB)
-and runs comfortably on CPU.  The model auto-downloads on first use.
+Uses the latest Ultralytics YOLO11 model for superior detection accuracy.
+The model auto-downloads on first use (~130 MB for yolo11x).
 Returns both detections and an annotated image with bounding boxes.
 """
 
@@ -21,7 +21,7 @@ from backend.router.specialist import SpecialistDescriptor
 @dataclass(frozen=True)
 class YOLOConfig:
     enabled: bool = True
-    model_id: str = "yolov8n.pt"  # nano variant, fast on CPU
+    model_id: str = "yolo11x.pt"  # YOLO11 extra-large — most accurate
     confidence: float = 0.25
     device: str = "cpu"
 
@@ -34,7 +34,7 @@ class YOLOConfig:
             confidence = 0.25
         return cls(
             enabled=os.getenv("BHUVISION_YOLO_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
-            model_id=os.getenv("BHUVISION_YOLO_MODEL", "yolov8n.pt").strip(),
+            model_id=os.getenv("BHUVISION_YOLO_MODEL", "yolo11x.pt").strip(),
             confidence=confidence,
             device=os.getenv("BHUVISION_YOLO_DEVICE", "cpu").strip(),
         )
@@ -45,9 +45,9 @@ class YOLOConfig:
 # ---------------------------------------------------------------------------
 
 class YOLOAdapter:
-    """Specialist adapter for YOLOv8 object detection."""
+    """Specialist adapter for YOLO11 object detection."""
 
-    model_name = "YOLOv8"
+    model_name = "YOLO11"
     capabilities = ("object_detection",)
     required_modalities = ("optical",)
 
@@ -112,7 +112,7 @@ class YOLOAdapter:
             import ultralytics  # noqa: F401
         except ImportError:
             return False, "ultralytics package is not installed."
-        return True, "YOLOv8 is available for object detection."
+        return True, f"YOLO11 ({self.config.model_id}) is available for object detection."
 
     def _load(self):
         """Lazy-load the YOLO model."""

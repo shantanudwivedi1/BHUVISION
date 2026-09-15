@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+try:
+    import rasterio
+    _HAS_RASTERIO = True
+except ImportError:
+    rasterio = None
+    _HAS_RASTERIO = False
+
+
+def _require_rasterio():
+    if not _HAS_RASTERIO:
+        raise ImportError(
+            "rasterio is required for reading GeoTIFF/raster files. "
+            "Install it with: pip install rasterio"
+        )
+
+
+RASTER_SUFFIXES = {".tif", ".tiff", ".geotiff"}
+IMAGE_SUFFIXES = RASTER_SUFFIXES | {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _read_band(
+    path: str | Path,
+) -> np.ndarray:
+    _require_rasterio()
+
+    path = Path(path)
+
+    if not path.exists():
+        raise ValueError("Raster file was not found.")
+
+    with rasterio.open(path) as src:
+
+        if src.count < 1:
+            raise ValueError("Raster contains no bands.")
+
+        return src.read(
+            1
+        ).astype(
+            np.float32
+        )
+
+
+def _normalize(
+    band: np.ndarray,
+    low_percentile: float = 2.0,
+    high_percentile: float = 98.0,
+) -> np.ndarray:
+
+    band = np.nan_to_num(
+        band,
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+
+    finite = np.isfinite(band)
+    if not finite.any():
+        return np.zeros_like(band, dtype=np.float32)
+
+    values = band[finite]
+    minimum = float(np.percentile(values, low_percentile))
+    maximum = float(np.percentile(values, high_percentile))
+
+    if maximum <= minimum:
+        return np.zeros_like(
+            band,
+            dtype=np.float32,
+        )
+
+    return (
+        np.clip((band - minimum) / (maximum - minimum), 0.0, 1.0)
+    ).astype(
+        np.float32
+    )
+
+
+def _rgb_band_indexes(src) -> tuple[int, int, int]:
+    _require_rasterio()
+    if src.count == 1:
+        return 1, 1, 1
+
+    colorinterp = list(src.colorinterp)
+    named = {
+        "red": next((index + 1 for index, value in enumerate(colorinterp) if getattr(value, "name", "").lower() == "red"), None),
+        "green": next((index + 1 for index, value in enumerate(colorinterp) if getattr(value, "name", "").lower() == "green"), None),
+        "blue": next((index + 1 for index, value in enumerate(colorinterp) if getattr(value, "name", "").lower() == "blue"), None),
+    }
+    if all(value is not None for value in named.values()):
+        return named["red"], named["green"], named["blue"]
+    if src.count == 3:
+        return 1, 2, 3
+    raise ValueError("The GeoTIFF has multiple bands but no explicit RGB band mapping.")
+
+
+def raster_to_rgb(path: str | Path) -> Image.Image:
+    """Convert a supported scientific raster into a PIL RGB visualization."""
+    _require_rasterio()
+    path = Path(path)
+    if not path.exists() or not path.is_file():
+        raise ValueError("Raster file was not found.")
+
+    try:
+        with rasterio.open(path) as src:
+            indexes = _rgb_band_indexes(src)
+            bands = [src.read(index).astype(np.float32) for index in indexes]
+    except rasterio.errors.RasterioError as exc:
+        raise ValueError("Unable to decode the supplied GeoTIFF.") from exc
+
+    if not (bands[0].shape == bands[1].shape == bands[2].shape):
+        raise ValueError("Raster RGB bands do not have matching dimensions.")
+
+    rgb = np.stack([_normalize(band) for band in bands], axis=-1)
+    return Image.fromarray(np.round(rgb * 255.0).astype(np.uint8), mode="RGB")
+
+
+def load_image_input(image: Image.Image | str | Path) -> Image.Image:
+    """Normalize a PIL image or uploaded path before GeoChat inference."""
+    if isinstance(image, Image.Image):
+        return image.convert("RGB")
+
+    path = Path(image)
+    if path.suffix.lower() in RASTER_SUFFIXES:
+        return raster_to_rgb(path)
+    if path.suffix.lower() not in IMAGE_SUFFIXES:
+        raise ValueError("Unsupported image file type.")
+
+    try:
+        with Image.open(path) as loaded:
+            return loaded.convert("RGB")
+    except (FileNotFoundError, OSError) as exc:
+        raise ValueError("Unable to decode the supplied image.") from exc
+
+
+def sar1_to_rgb(
+    vv_path: str | Path,
+    vh_path: str | Path,
+) -> Image.Image:
+    """
+    Convert a Sentinel-1 VV/VH pair into the
+    3-channel representation used by the current
+    GeoChat pipeline.
+
+        R = VV
+        G = VH
+        B = (VV + VH) / 2
+    """
+
+    vv = _read_band(
+        vv_path
+    )
+
+    vh = _read_band(
+        vh_path
+    )
+
+    if vv.shape != vh.shape:
+        raise ValueError(
+            "VV and VH dimensions do not match: "
+            f"{vv.shape} vs {vh.shape}"
+        )
+
+    vv_norm = _normalize(vv)
+    vh_norm = _normalize(vh)
+
+    third = (
+        vv_norm + vh_norm
+    ) / 2.0
+
+    rgb = np.stack(
+        [
+            vv_norm,
+            vh_norm,
+            third,
+        ],
+        axis=-1,
+    )
+
+    rgb = (
+        np.clip(
+            rgb,
+            0.0,
+            1.0,
+        )
+        * 255.0
+    ).astype(
+        np.uint8
+    )
+
+    return Image.fromarray(
+        rgb,
+        mode="RGB",
+    )

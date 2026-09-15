@@ -107,15 +107,15 @@ class PlannerTests(unittest.TestCase):
     def test_model_router_marks_semantic_capabilities_unavailable(self):
         plan = build_query_plan("What is visible in this satellite image?")
         route = route_plan(plan)
-        # VQA routes to BLIP (available on CPU).
-        self.assertEqual(route["requested_capability"], "BLIP")
+        # VQA routes to GeoChat-7B (sole VLM, no BLIP fallback).
+        self.assertEqual(route["requested_capability"], "GeoChat-7B")
         self.assertTrue(route["available"])
         self.assertEqual(route["execution"], "not_executed")
 
     def test_object_detection_routes_to_yolo(self):
         plan = build_query_plan("Detect all objects in this image.")
         route = route_plan(plan)
-        self.assertEqual(route["requested_capability"], "YOLOv8")
+        self.assertIn("YOLO11", route["requested_capability"])
         self.assertTrue(route["available"])
 
     def test_png_metadata_is_real_and_nonsemantic(self):

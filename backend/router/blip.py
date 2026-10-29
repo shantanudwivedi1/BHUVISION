@@ -1,12 +1,12 @@
 """BLIP adapter for VQA and image captioning.
 
-Uses Salesforce/blip-vqa-base for visual question answering and
-Salesforce/blip-image-captioning-base for captioning.  Both models
-are CPU-friendly and auto-download from HuggingFace on first use.
+Uses the repository's local BLIP VQA weights for visual question answering
+and image descriptions. Missing files are never downloaded automatically.
 """
 
 import io
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,7 +14,7 @@ from backend.router.specialist import SpecialistDescriptor
 
 
 # ---------------------------------------------------------------------------
-# Configuration (mirrors the existing CROMAConfig pattern)
+# Configuration
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -26,11 +26,12 @@ class BLIPConfig:
 
     @classmethod
     def from_env(cls) -> "BLIPConfig":
+        repo_models = Path(__file__).resolve().parents[2] / "models"
         return cls(
             enabled=os.getenv("BHUVISION_BLIP_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
             device=os.getenv("BHUVISION_BLIP_DEVICE", "cpu").strip(),
-            vqa_model_id=os.getenv("BHUVISION_BLIP_VQA_MODEL", "Salesforce/blip-vqa-base").strip(),
-            caption_model_id=os.getenv("BHUVISION_BLIP_CAPTION_MODEL", "Salesforce/blip-vqa-base").strip(),
+            vqa_model_id=os.getenv("BHUVISION_BLIP_VQA_MODEL", str(repo_models / "blip-vqa-base")).strip(),
+            caption_model_id=os.getenv("BHUVISION_BLIP_CAPTION_MODEL", str(repo_models / "blip-vqa-base")).strip(),
         )
 
 
@@ -74,7 +75,7 @@ class BLIPAdapter:
         inputs = processor(image, question, return_tensors="pt").to(self.config.device)
         out = model.generate(**inputs, max_new_tokens=64)
         answer = processor.decode(out[0], skip_special_tokens=True).strip()
-        return {"answer": answer, "model": self.config.vqa_model_id}
+        return {"answer": answer, "model": "Salesforce/blip-vqa-base (local)"}
 
     def caption(self, image_bytes: bytes) -> dict[str, Any]:
         """Generate a description / caption for an image.
@@ -88,11 +89,11 @@ class BLIPAdapter:
             inputs = processor(image, return_tensors="pt").to(self.config.device)
             out = model.generate(**inputs, max_new_tokens=64)
             text = processor.decode(out[0], skip_special_tokens=True).strip()
-            return {"caption": text, "model": self.config.caption_model_id}
+            return {"caption": text, "model": "Salesforce/blip-vqa-base (local)"}
 
         # Seamlessly use the local cached VQA model
         vqa_res = self.vqa(image_bytes, "Describe what you see in this image")
-        return {"caption": vqa_res["answer"], "model": self.config.vqa_model_id}
+        return {"caption": vqa_res["answer"], "model": vqa_res["model"]}
 
     # -- Internals ---------------------------------------------------------
 
@@ -105,6 +106,8 @@ class BLIPAdapter:
             import torch  # noqa: F401
         except ImportError as exc:
             return False, f"BLIP runtime dependency missing: {exc}"
+        if not _is_model_cached(self.config.vqa_model_id):
+            return False, f"BLIP weights are not installed locally ({self.config.vqa_model_id}); offline mode will not download them."
         return True, "BLIP is available for VQA and captioning."
 
     def _load_vqa(self):
@@ -112,13 +115,13 @@ class BLIPAdapter:
         if self._vqa_model is None:
             if not _is_model_cached(self.config.vqa_model_id):
                 raise RuntimeError(
-                    f"BLIP VQA model weights ({self.config.vqa_model_id}) are currently downloading in the background. "
-                    "Inference will be available once the download completes."
+                    f"BLIP VQA model weights ({self.config.vqa_model_id}) are not installed locally. Offline mode will not download them."
                 )
             from transformers import BlipProcessor, BlipForQuestionAnswering
-            self._vqa_processor = BlipProcessor.from_pretrained(self.config.vqa_model_id)
+            self._vqa_processor = BlipProcessor.from_pretrained(self.config.vqa_model_id, local_files_only=True)
             self._vqa_model = BlipForQuestionAnswering.from_pretrained(
                 self.config.vqa_model_id,
+                local_files_only=True,
             ).to(self.config.device).eval()
         return self._vqa_model, self._vqa_processor
 
@@ -127,13 +130,13 @@ class BLIPAdapter:
         if self._caption_model is None:
             if not _is_model_cached(self.config.caption_model_id):
                 raise RuntimeError(
-                    f"BLIP captioning model weights ({self.config.caption_model_id}) are currently downloading in the background. "
-                    "Inference will be available once the download completes."
+                    f"BLIP captioning model weights ({self.config.caption_model_id}) are not installed locally. Offline mode will not download them."
                 )
             from transformers import BlipProcessor, BlipForConditionalGeneration
-            self._caption_processor = BlipProcessor.from_pretrained(self.config.caption_model_id)
+            self._caption_processor = BlipProcessor.from_pretrained(self.config.caption_model_id, local_files_only=True)
             self._caption_model = BlipForConditionalGeneration.from_pretrained(
                 self.config.caption_model_id,
+                local_files_only=True,
             ).to(self.config.device).eval()
         return self._caption_model, self._caption_processor
 
@@ -150,9 +153,15 @@ def _open_image(data: bytes):
 
 def _is_model_cached(model_id: str) -> bool:
     """Check if model weights are present in local HuggingFace cache."""
+    local_model = Path(model_id)
+    if local_model.is_dir():
+        return (local_model / "config.json").is_file() and any(
+            (local_model / filename).is_file()
+            for filename in ("model.safetensors", "pytorch_model.bin", "model.safetensors.index.json", "pytorch_model.bin.index.json")
+        )
     try:
         from huggingface_hub import try_to_load_from_cache
-        for filename in ("model.safetensors", "pytorch_model.bin"):
+        for filename in ("model.safetensors", "pytorch_model.bin", "model.safetensors.index.json", "pytorch_model.bin.index.json"):
             res = try_to_load_from_cache(model_id, filename)
             if res is not None and not str(res).endswith(".incomplete") and "incomplete" not in str(res):
                 return True

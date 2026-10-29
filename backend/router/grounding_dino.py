@@ -1,7 +1,7 @@
 """Grounding DINO adapter for open-vocabulary, text-prompted object detection.
 
-Uses IDEA-Research/grounding-dino-tiny for zero-shot object detection and grounding
-on satellite and remote-sensing imagery using arbitrary natural language prompts.
+Uses the repository's local Grounding DINO Tiny weights for zero-shot object
+detection and grounding using arbitrary natural language prompts.
 Returns both detections (class, confidence, bounding boxes) and an annotated image.
 """
 
@@ -11,6 +11,7 @@ import base64
 import io
 import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +32,7 @@ class GroundingDINOConfig:
 
     @classmethod
     def from_env(cls) -> "GroundingDINOConfig":
+        repo_model = Path(__file__).resolve().parents[2] / "models" / "grounding-dino-tiny"
         box_th = os.getenv("BHUVISION_GROUNDING_DINO_BOX_THRESHOLD",
                  os.getenv("BHUVISION_GROUNDING_DINO_CONFIDENCE", "0.25")).strip()
         text_th = os.getenv("BHUVISION_GROUNDING_DINO_TEXT_THRESHOLD", "0.25").strip()
@@ -49,7 +51,7 @@ class GroundingDINOConfig:
 
         return cls(
             enabled=os.getenv("BHUVISION_GROUNDING_DINO_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
-            model_id=os.getenv("BHUVISION_GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-tiny").strip(),
+            model_id=os.getenv("BHUVISION_GROUNDING_DINO_MODEL", str(repo_model)).strip(),
             box_threshold=box_threshold,
             text_threshold=text_threshold,
             device=device,
@@ -207,7 +209,7 @@ class GroundingDINOAdapter:
         return {
             "detections": detections,
             "detection_count": len(detections),
-            "model": f"Grounding DINO ({self.config.model_id})",
+            "model": "Grounding DINO Tiny (local)",
             "annotated_image": annotated_b64,
             "text_prompt": text_prompt,
         }
@@ -218,10 +220,25 @@ class GroundingDINOAdapter:
         if not self.config.enabled:
             return False, "Grounding DINO is disabled via BHUVISION_GROUNDING_DINO_ENABLED."
         try:
-            from transformers import GroundingDinoForObjectDetection, GroundingDinoProcessor  # noqa: F401
-        except ImportError:
-            return False, "transformers does not contain Grounding DINO support."
-        return True, f"Grounding DINO ({self.config.model_id}) is available for open-set detection."
+            import torch  # noqa: F401
+            from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor  # noqa: F401
+            from huggingface_hub import try_to_load_from_cache
+            model_path = Path(self.config.model_id)
+            if model_path.is_dir():
+                has_config = (model_path / "config.json").is_file()
+                has_weights = any((model_path / f).is_file() for f in (
+                    "model.safetensors", "pytorch_model.bin", "model.safetensors.index.json", "pytorch_model.bin.index.json"
+                ))
+            else:
+                has_config = try_to_load_from_cache(self.config.model_id, "config.json")
+                has_weights = any(try_to_load_from_cache(self.config.model_id, f) for f in (
+                    "model.safetensors", "pytorch_model.bin", "model.safetensors.index.json", "pytorch_model.bin.index.json"
+                ))
+            if not (has_config and has_weights):
+                return False, f"Grounding DINO weights are not installed locally ({self.config.model_id}); offline mode will not download them."
+        except (ImportError, OSError, ValueError) as exc:
+            return False, f"Local Grounding DINO is unavailable: {exc}"
+        return True, "Grounding DINO Tiny local weights are available for open-set detection."
 
     def _load(self):
         """Lazy-load the Grounding DINO processor and model."""
@@ -235,8 +252,10 @@ class GroundingDINOAdapter:
                 device = self.config.device
 
             self._device = device
-            self._processor = AutoProcessor.from_pretrained(self.config.model_id)
-            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(self.config.model_id).to(device)
+            self._processor = AutoProcessor.from_pretrained(self.config.model_id, local_files_only=True)
+            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(
+                self.config.model_id, local_files_only=True
+            ).to(device)
             self._model.eval()
 
         return self._processor, self._model, self._device

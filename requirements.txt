@@ -1,7 +1,8 @@
 fastapi>=0.115
 uvicorn>=0.30
+python-dotenv>=1.0
 torch>=2.0
 torchvision>=0.15
-transformers>=4.30
+transformers>=4.45,<5
+huggingface-hub>=0.26
 Pillow>=10.0
-ultralytics>=8.0

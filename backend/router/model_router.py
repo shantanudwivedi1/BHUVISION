@@ -1,55 +1,44 @@
-"""Route a QueryPlan to the right specialist model and execute it.
-
-Specialists:
-- GeoChat-7B (Primary remote sensing VLM for VQA, Captioning, and Grounded Detection)
-- YOLO11 (Local real-time Object Detection with bounding boxes)
-"""
+"""Route analysis tasks to locally installed specialist models only."""
 
 from typing import Any
 
 from backend.models.schemas import Evidence, QueryPlan
-from backend.router.geochat import GeoChatAdapter
+from backend.router.blip import BLIPAdapter
 from backend.router.grounding_dino import GroundingDINOAdapter
 
 # Singleton adapters — lightweight until first inference call.
-_geochat = GeoChatAdapter()
+_blip = BLIPAdapter()
 _grounding_dino = GroundingDINOAdapter()
 
 
 def route_plan(plan: QueryPlan) -> dict:
     """Describe which capability the plan needs and whether it's available."""
 
-    geochat_desc = _geochat.describe().as_dict()
+    blip_desc = _blip.describe().as_dict()
 
-    # VQA / Captioning → GeoChat-7B only
+    # VQA and captioning use locally cached BLIP weights.
     if plan.task in {"vqa", "captioning"}:
         return {
-            "requested_capability": "GeoChat-7B",
-            "model_name": "MBZUAI/geochat-7B",
-            "capabilities": geochat_desc["capabilities"],
-            "available": geochat_desc["available"],
+            "requested_capability": "Local BLIP",
+            "model_name": "Salesforce/blip-vqa-base",
+            "capabilities": blip_desc["capabilities"],
+            "available": blip_desc["available"],
             "execution": "not_executed",
-            "reason": geochat_desc["reason"],
+            "reason": blip_desc["reason"],
             "lightweight_capability": "image_metadata_analyzer",
             "lightweight_available": True,
         }
 
-    # Object detection → GeoChat-7B grounding + Grounding DINO open-vocabulary bounding boxes
+    # Object detection uses locally cached Grounding DINO.
     if plan.task == "object_detection":
-        model_names = []
-        if geochat_desc["available"]:
-            model_names.append("GeoChat-7B")
         dino_desc = _grounding_dino.describe().as_dict()
-        if dino_desc["available"]:
-            model_names.append("Grounding DINO")
-
         return {
-            "requested_capability": "GeoChat-7B + Grounding DINO",
-            "model_name": " + ".join(model_names) or "Grounding DINO",
+            "requested_capability": "Local Grounding DINO",
+            "model_name": "Grounding DINO Tiny" if dino_desc["available"] else "",
             "capabilities": ["object_detection", "grounding", "open_vocabulary", "bounding_boxes"],
-            "available": bool(model_names),
+            "available": dino_desc["available"],
             "execution": "not_executed",
-            "reason": "Grounded object detection with GeoChat-7B and open-vocabulary bounding boxes via Grounding DINO.",
+            "reason": dino_desc["reason"],
             "lightweight_capability": "image_metadata_analyzer",
             "lightweight_available": True,
         }
@@ -131,67 +120,35 @@ def execute_plan(
     if plan.task == "vqa":
         for filename, _ct, data in optical_uploads:
             try:
-                result = _geochat.vqa(data, query, sar_bytes=sar_bytes)
+                result = _blip.vqa(data, query)
                 evidence.append(Evidence(
                     evidence_type="model_finding",
                     source=filename,
                     model=result["model"],
                     finding=result["answer"],
-                    provenance={"method": "geochat_vqa", "question": query, "has_sar": sar_bytes is not None},
+                    provenance={"method": "local_blip_vqa", "question": query},
                 ))
             except Exception as exc:
-                warnings.append(f"GeoChat VQA failed on {filename}: {exc}")
+                warnings.append(f"Local BLIP VQA failed on {filename}: {exc}")
 
     # -- Captioning Task ---------------------------------------------------
     elif plan.task == "captioning":
         for filename, _ct, data in optical_uploads:
             try:
-                result = _geochat.caption(data, sar_bytes=sar_bytes)
+                result = _blip.caption(data)
                 evidence.append(Evidence(
                     evidence_type="model_finding",
                     source=filename,
                     model=result["model"],
                     finding=result["caption"],
-                    provenance={"method": "geochat_captioning", "has_sar": sar_bytes is not None},
+                    provenance={"method": "local_blip_captioning"},
                 ))
             except Exception as exc:
-                warnings.append(f"GeoChat captioning failed on {filename}: {exc}")
+                warnings.append(f"Local BLIP captioning failed on {filename}: {exc}")
 
     # -- Object Detection Task ---------------------------------------------
     elif plan.task == "object_detection":
         for filename, _ct, data in optical_uploads:
-            # 1. Run GeoChat Grounded Detection
-            if _geochat.describe().available:
-                try:
-                    gc_result = _geochat.detect(data, query=query, sar_bytes=sar_bytes)
-                    if gc_result.get("description"):
-                        evidence.append(Evidence(
-                            evidence_type="model_finding",
-                            source=filename,
-                            model=gc_result["model"],
-                            finding=gc_result["description"],
-                            provenance={"method": "geochat_grounding", "target": query},
-                        ))
-                    for det in gc_result.get("detections", []):
-                        evidence.append(Evidence(
-                            evidence_type="model_finding",
-                            source=filename,
-                            model=gc_result["model"],
-                            finding=f"Located {det['class']}",
-                            confidence=det["confidence"],
-                            spatial={"bbox": det.get("bbox", det.get("box_pct"))},
-                            provenance={"method": "geochat_bounding_box"},
-                        ))
-                    if gc_result.get("annotated_image"):
-                        annotated_images.append({
-                            "filename": f"geochat_{filename}",
-                            "data_url": gc_result["annotated_image"],
-                            "source_model": "GeoChat-7B",
-                        })
-                except Exception as exc:
-                    warnings.append(f"GeoChat detection grounding failed on {filename}: {exc}")
-
-            # 2. Run Grounding DINO Object Detection (open-vocabulary bounding boxes)
             try:
                 dino_result = _grounding_dino.detect(data, query=query)
                 for det in dino_result["detections"]:
@@ -206,14 +163,14 @@ def execute_plan(
                     ))
                 if dino_result.get("annotated_image"):
                     annotated_images.append({
-                        "filename": f"grounding_dino_{filename}",
+                        "filename": f"detection_{filename}",
                         "data_url": dino_result["annotated_image"],
                         "source_model": "Grounding DINO",
                     })
                 if not dino_result["detections"] and not annotated_images:
                     warnings.append(f"No objects detected in {filename} matching query '{query}' above confidence threshold.")
             except Exception as exc:
-                warnings.append(f"Grounding DINO detection failed on {filename}: {exc}")
+                warnings.append(f"Local object detection failed on {filename}: {exc}")
 
     # Mark that the model was executed in the routing dict.
     if evidence:

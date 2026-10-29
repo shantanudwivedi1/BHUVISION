@@ -1,57 +1,85 @@
 # BHUVISION
 
-BHUVISION is a local FastAPI + React prototype. The default path is deterministic planning plus lightweight image metadata. CROMA is an optional GPU capability and is disabled by default; no checkpoint is downloaded on the development machine.
+BHUVISION is a local satellite-image analysis app with a React/Vite frontend and a FastAPI backend. Inference uses model files stored in this repository. The application runs with Hugging Face offline mode enabled and does not call AWS, hosted model APIs, or other inference services.
 
-## Run the local demo
+## Included model weights
 
-From the repository root, use two terminals:
+About 2.2 GB of model files are stored with Git LFS under `models/`:
 
-```bash
-# Terminal 1: backend
-source .venv/bin/activate
+| Model | Use | Approx. size | License |
+| --- | --- | ---: | --- |
+| Salesforce BLIP VQA Base | Image questions and descriptions | 1.54 GB | BSD-3-Clause |
+| IDEA Research Grounding DINO Tiny | Open vocabulary object detection | 689 MB | Apache-2.0 |
+
+See [models/README.md](models/README.md) for model sources and license notices.
+
+## Installation on Windows
+
+Install Git, Git LFS, Python 3.10 or 3.11, and Node.js 20.19+ or 22.12+. Git LFS is required to download the model files.
+
+```powershell
+git lfs install
+git clone https://github.com/shantanudwivedi1/BHUVISION.git
+cd BHUVISION
+git lfs pull
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-uvicorn backend.main:app --host 127.0.0.1 --port 8000
-```
 
-```bash
-# Terminal 2: frontend
+Copy-Item .env.example .env
 npm install
-npm run dev
 ```
 
-Open `http://127.0.0.1:5173/`. The frontend proxies `/health` and `/analyze` to the backend. Verify the backend independently with:
+PyTorch installation may differ for CPU and CUDA machines. If pip cannot resolve a matching torch build, follow the [official PyTorch install selector](https://pytorch.org/get-started/locally/) and install the matching `torch` and `torchvision` pair before installing the remaining requirements.
+
+## Run the app
+
+Open two PowerShell terminals in the repository. Activate the virtual environment in the backend terminal:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Start the frontend in the second terminal:
+
+```powershell
+npm run dev -- --host 127.0.0.1
+```
+
+Open <http://127.0.0.1:5173/>. The backend health endpoint is <http://127.0.0.1:8000/health>.
+
+## Linux and macOS setup
+
+Install Git LFS, Python 3.10 or 3.11, and Node.js 20.19+ or 22.12+, then run:
 
 ```bash
-curl http://127.0.0.1:8000/health
+git lfs install
+git clone https://github.com/shantanudwivedi1/BHUVISION.git
+cd BHUVISION
+git lfs pull
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+cp .env.example .env
+npm install
 ```
 
-## CROMA capability
+Run the backend and frontend in separate terminals using the same commands shown above, replacing the PowerShell activation command with `source .venv/bin/activate`.
 
-CROMA is integrated as a Transformers-based optical + SAR feature extractor. It expects co-registered Sentinel-1 SAR input with shape `(2, H, W)` and Sentinel-2 optical input with shape `(12, H, W)`. A 13-band Sentinel-2 tensor is accepted after removing B10. The adapter returns a learned joint representation shape only; it does not produce semantic labels or confidence scores.
+## Offline use
 
-The implementation follows the Transformers CROMA model card at [`BiliSakura/CROMA-transformers`](https://huggingface.co/BiliSakura/CROMA-transformers), using `AutoImageProcessor` and `AutoModel` with `trust_remote_code=True`.
+The model weights are included in Git LFS, so the initial clone and dependency installation need network access. After Git LFS has downloaded the files and Python and Node dependencies are installed, the app can run without internet access. `backend.main` sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`; model loaders use local files only. Missing weights are reported as unavailable and are not downloaded in the background.
 
-## Run CROMA on a GPU host
+When transferring a working installation to an offline computer, copy the entire repository including the materialized LFS files, the Python environment or wheel packages, and `node_modules` if they are needed there. Do not copy `.env` if it contains local secrets.
 
-Run these commands on a CUDA-enabled Linux host or cloud GPU runtime, not the MacBook Air development environment:
+## Troubleshooting
 
-```bash
-python -m venv .venv-croma
-source .venv-croma/bin/activate
-
-# Install the torch build matching the host CUDA version.
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install transformers einops numpy opencv-python fastapi uvicorn
-
-export BHUVISION_CROMA_ENABLED=true
-export BHUVISION_CROMA_DEVICE=cuda
-export BHUVISION_CROMA_MODEL_ID=BiliSakura/CROMA-transformers
-export BHUVISION_CROMA_ALLOW_DOWNLOAD=true
-export BHUVISION_CROMA_ALLOW_CPU=false
-
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
-```
-
-The first enabled run downloads the configured Hugging Face checkpoint to that GPU host. For a pre-staged checkpoint, set `BHUVISION_CROMA_MODEL_PATH=/absolute/path/to/croma-base-patch8-120` and leave `BHUVISION_CROMA_ALLOW_DOWNLOAD=false`.
-
-The current `/analyze` upload path does not infer Sentinel-1/Sentinel-2 multiband tensors from ordinary PNG/JPEG files, so it does not invoke CROMA automatically. Use `CROMAAdapter.run(sar_images, optical_images)` with modality-labeled arrays when wiring the specialist execution path.
+- If model files appear as small text pointer files, install Git LFS and run `git lfs pull` while online.
+- If PowerShell blocks virtual environment activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, then activate again.
+- If PyTorch cannot use CUDA, install the torch build matching the installed CUDA runtime or set the model device options in `.env` to `cpu`.
+- The first inference loads the local model into memory and can take a little time. Later requests reuse the loaded model.

@@ -3,6 +3,12 @@ import os
 from dotenv import load_dotenv
 load_dotenv()  # Load .env before any adapter reads env vars
 
+# Model loading must never contact hosted inference or download missing weights.
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["BHUVISION_LLM_PROVIDER"] = "none"
+os.environ["BHUVISION_GEOCHAT_ENABLED"] = "false"
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -36,7 +42,8 @@ app.add_middleware(
 def health_check():
     return {
         "status": "ok",
-        "project": "BHUVISION"
+        "project": "BHUVISION",
+        "inference": "local_only",
     }
 
 
